@@ -3,7 +3,6 @@ import json
 import hmac
 import hashlib
 import logging
-import asyncio
 from typing import List
 
 import discord
@@ -19,25 +18,20 @@ logger = logging.getLogger("DiscordWebhookBot")
 load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID"))
-WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 3000))  # Default to 3000 if not set
+WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
 # Define Intents
 intents = discord.Intents.default()
-# Note: Message Content intent is not strictly necessary for just sending embeds/views
-# but good to have if you expand functionality.
-# intents.message_content = True
 
 # --- Carousel View Logic ---
 
 class CarouselView(discord.ui.View):
     """
-    A View that manages an image carousel with Back and Next buttons.
-    It maintains the state of which image index is currently being shown.
+    Manages an image carousel with Back and Next buttons.
+    Maintains the state of which image index is currently being shown.
     """
     def __init__(self, images: List[str]):
-        # timeout=None means the buttons won't stop working after X minutes.
-        # Important: If the bot restarts, these views will stop working unless persistent views are implemented.
         super().__init__(timeout=None)
         self.images = images
         self.current_index = 0
@@ -45,7 +39,6 @@ class CarouselView(discord.ui.View):
 
     def update_button_state(self):
         """Enables/disables buttons based on current index position."""
-        # Button children order: [0] is Back, [1] is Next
         self.back_button.disabled = (self.current_index == 0)
         self.next_button.disabled = (self.current_index == len(self.images) - 1)
 
@@ -64,7 +57,6 @@ class CarouselView(discord.ui.View):
         if self.current_index > 0:
             self.current_index -= 1
             self.update_button_state()
-            # crucial: update the existing message with new embed and view state
             await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.primary, row=0)
@@ -72,22 +64,22 @@ class CarouselView(discord.ui.View):
         if self.current_index < len(self.images) - 1:
             self.current_index += 1
             self.update_button_state()
-            # crucial: update the existing message
             await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
 
 # --- Webhook Verification ---
 
 def verify_supabase_signature(request_body: bytes, signature_header: str) -> bool:
     """
-    Verifies that the request actually came from Supabase using the JWT secret.
-    Supabase sends an 'x-supabase-signature' header containing the HMAC-SHA256 hex digest.
+    Verifies the HMAC-SHA256 signature from Supabase.
     """
-    if not SUPABASE_JWT_SECRET or not signature_header:
-        logger.warning("Missing JWT secret or signature header for verification.")
+    if not SUPABASE_JWT_SECRET:
+        logger.error("SUPABASE_JWT_SECRET is missing in environment.")
+        return False
+    
+    if not signature_header:
+        logger.warning("No signature header found in incoming request.")
         return False
 
-    # Create HMAC SHA256 using the secret key and the raw request body
     hmac_obj = hmac.new(
         key=SUPABASE_JWT_SECRET.encode('utf-8'),
         msg=request_body,
@@ -95,9 +87,7 @@ def verify_supabase_signature(request_body: bytes, signature_header: str) -> boo
     )
     calculated_signature = hmac_obj.hexdigest()
     
-    # Securely compare the calculated signature with the header
     return hmac.compare_digest(calculated_signature, signature_header)
-
 
 # --- Bot and Web Server Integration ---
 
@@ -109,7 +99,7 @@ class WebhookBot(commands.Bot):
         self.web_server_runner = None
 
     async def setup_hook(self):
-        """Runs when the bot is starting up. We start the webserver here."""
+        """Starts the aiohttp webserver when the bot launches."""
         self.web_server_runner = web.AppRunner(self.web_app)
         await self.web_server_runner.setup()
         site = web.TCPSite(self.web_server_runner, '0.0.0.0', WEBHOOK_PORT)
@@ -126,51 +116,46 @@ class WebhookBot(commands.Bot):
         logger.info(f'Bot logged in as {self.user} (ID: {self.user.id})')
 
     async def handle_webhook(self, request: web.Request):
-        """Handles incoming POST requests from Supabase."""
-        
-        # 1. Read raw body for verification
+        """Processes incoming Supabase Webhooks."""
         body_bytes = await request.read()
-        signature_header = request.headers.get('x-supabase-signature')
+        signature = request.headers.get('x-supabase-signature')
 
-        # 2. Verify Signature (Security Best Practice)
-        # Comment this out if testing locally without real Supabase headers, 
-        # but MUST enable in production.
-        """ if not verify_supabase_signature(body_bytes, signature_header):
-             logger.warning("Invalid webhook signature received.")
-             return web.Response(text="Invalid Signature", status=401)
- """
+        # 🔒 Active Verification
+        if not verify_supabase_signature(body_bytes, signature):
+            logger.warning(f"Invalid signature received: {signature}")
+            return web.Response(text="Unauthorized", status=401)
+
         try:
             data = json.loads(body_bytes.decode('utf-8'))
             record = data.get('record', {})
 
-            # 🛠️ FIX: Look into 'tracks' instead of 'thumbnail_urls'
+            # 🎵 Extract URLs from the 'tracks' JSONB column
             tracks = record.get('tracks', [])
-            
-            # Extract just the URLs from the track objects for the carousel
             thumbnail_urls = [t.get('url') for t in tracks if t.get('url')]
 
             if not thumbnail_urls:
-                logger.warning("No track URLs found to display in carousel.")
+                logger.warning("No track URLs found in payload.")
                 return web.Response(text="No tracks found", status=200)
 
             channel = self.get_channel(TARGET_CHANNEL_ID)
             if channel:
                 view = CarouselView(thumbnail_urls)
-                # You can customize this embed title to show the Project Title!
                 embed = view.get_embed()
                 embed.title = f"🎵 New Project: {record.get('title', 'Untitled')}"
                 
                 await channel.send(embed=embed, view=view)
-                return web.Response(text="Carousel sent")
+                return web.Response(text="Carousel sent", status=200)
+            else:
+                logger.error(f"Channel {TARGET_CHANNEL_ID} not found.")
+                return web.Response(text="Channel not found", status=500)
 
         except Exception as e:
-            logger.error(f"Error: {e}")
+            logger.error(f"Error processing webhook: {e}")
             return web.Response(text="Internal Error", status=500)
-
 
 if __name__ == "__main__":
     if not TOKEN or not TARGET_CHANNEL_ID or not SUPABASE_JWT_SECRET:
-         logger.error("Missing necessary environment variables. Check .env file.")
+         logger.error("Missing environment variables. Check your Railway settings.")
          exit(1)
 
     bot = WebhookBot()
