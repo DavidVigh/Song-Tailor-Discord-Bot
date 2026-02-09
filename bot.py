@@ -88,16 +88,14 @@ async def handle_webhook(request):
         
         briefing = discord.Embed(
             title=f"🚀 NEW REQUEST: {record.get('title', 'Untitled')}",
-            description=f"👤 **User ID:** `{record.get('user_id')}`\n💰 **Budget:** {price} FT",
+            description=f"👤 **Profile:** {record.get('profile_name', 'Unknown')}\n🆔 **User ID:** `{record.get('user_id')}`\n💰 **Budget:** {price} FT",
             color=0xe67e22 if record.get('genre') == 'rnr' else 0x9b59b6
         )
         briefing.add_field(name="🏷️ Genre", value=str(record.get('genre', 'N/A')).upper(), inline=True)
         briefing.add_field(name="⏱️ BPM", value=str(record.get('target_bpm', 'Var')), inline=True)
         briefing.add_field(name="📅 Deadline", value=str(record.get('deadline', 'ASAP')), inline=False)
         
-        # Admin Ping
-        mention = f"<@{ADMIN_USER_ID}>" if str(ADMIN_USER_ID) != "0" else "@everyone"
-        await channel.send(content=f"{mention} 🔔 New Order!", embed=briefing)
+        await channel.send(embed=briefing)
 
         # B. The Carousel (Bottom Card)
         tracks = record.get('tracks', [])
