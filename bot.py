@@ -99,8 +99,8 @@ class WebhookBot(commands.Bot):
 
             # 🔘 Buttons
             view = CarouselView(tracks) if tracks else discord.ui.View()
-            view.add_item(discord.ui.Button(label="Open Admin Board", url="https://songtailor.vercel.app/admin", style=discord.ButtonStyle.link))
-            view.add_item(discord.ui.Button(label="New Request", url="https://songtailor.vercel.app/request", style=discord.ButtonStyle.link))
+            view.add_item(discord.ui.Button(label="Open Admin Board", url="https://song-tailor.vercel.app/admin", style=discord.ButtonStyle.link))
+            view.add_item(discord.ui.Button(label="New Request", url="https://song-tailor.vercel.app/request", style=discord.ButtonStyle.link))
 
             await channel.send(embed=briefing)
             if tracks:
