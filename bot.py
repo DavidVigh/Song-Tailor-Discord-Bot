@@ -1,6 +1,7 @@
 import os
 import logging
 import discord
+import aiohttp
 from discord.ext import commands
 from aiohttp import web
 
@@ -12,33 +13,32 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID"))
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
 WEBHOOK_SECRET = os.getenv("SUPABASE_JWT_SECRET")
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", 0) # Optional: Pings you
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", 0)
+
+# Database Connection (For looking up names)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 # 2. The Interactive Carousel
 class CarouselView(discord.ui.View):
     def __init__(self, tracks, record):
-        super().__init__(timeout=None) # Timeout=None means buttons never stop working
-        self.tracks = [t for t in tracks if t.get('url')] # Filter empty links
+        super().__init__(timeout=None)
+        self.tracks = [t for t in tracks if t.get('url')]
         self.record = record
         self.current_index = 0
         self.update_buttons()
 
     def update_buttons(self):
-        # Disable "Back" if we are on the first track
         self.back_btn.disabled = (self.current_index == 0)
-        # Disable "Next" if we are on the last track
         self.next_btn.disabled = (self.current_index == len(self.tracks) - 1)
 
     def get_yt_image(self, url):
-        # Extracts the ID from a YouTube URL to get the image
         if 'v=' in url: return f"https://img.youtube.com/vi/{url.split('v=')[-1].split('&')[0]}/mqdefault.jpg"
         if 'youtu.be/' in url: return f"https://img.youtube.com/vi/{url.split('youtu.be/')[-1].split('?')[0]}/mqdefault.jpg"
         return None
 
     def get_embed(self):
         track = self.tracks[self.current_index]
-        
-        # Color Logic: Orange for 'rnr', Purple for others
         color = 0xe67e22 if self.record.get('genre') == 'rnr' else 0x9b59b6
         
         embed = discord.Embed(
@@ -46,12 +46,8 @@ class CarouselView(discord.ui.View):
             description=f"**[Click to Listen on YouTube]({track.get('url')})**",
             color=color
         )
-        
-        # Set the main image to the YouTube thumbnail
         thumb_url = self.get_yt_image(track.get('url'))
         if thumb_url: embed.set_image(url=thumb_url)
-        
-        # Footer shows progress (e.g., "Track 1 of 3")
         embed.set_footer(text=f"Preview {self.current_index + 1} of {len(self.tracks)} • {self.record.get('title')}")
         return embed
 
@@ -79,32 +75,53 @@ async def handle_webhook(request):
     try:
         data = await request.json()
         record = data.get('record', {})
+        user_id = record.get('user_id')
         
+        # --- 🔍 PROFILE LOOKUP START ---
+        client_name = "Unknown Profile"
+        
+        # Only try to fetch if we have the ID and the Keys
+        if user_id and SUPABASE_URL and SUPABASE_KEY:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    # We ask Supabase: "Give me the full_name for this ID"
+                    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=full_name"
+                    headers = {
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}"
+                    }
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            profiles = await resp.json()
+                            if profiles and len(profiles) > 0:
+                                client_name = profiles[0].get('full_name', 'Unknown')
+            except Exception as e:
+                logger.error(f"Could not fetch profile: {e}")
+        # --- 🔍 PROFILE LOOKUP END ---
+
         channel = bot.get_channel(TARGET_CHANNEL_ID)
         if not channel: channel = await bot.fetch_channel(TARGET_CHANNEL_ID)
 
-        # A. The "Briefing" Embed (Top Card)
+        # Briefing Embed
         price = f"{int(record.get('total_price', 0)):,}".replace(',', ' ')
-        
         briefing = discord.Embed(
             title=f"🚀 NEW REQUEST: {record.get('title', 'Untitled')}",
-            description=f"👤 **Profile:** {record.get('profile_name', 'Unknown')}\n🆔 **User ID:** `{record.get('user_id')}`\n💰 **Budget:** {price} FT",
+            description=f"👤 **Profile:** {client_name}\n🆔 **User ID:** `{user_id}`\n💰 **Budget:** {price} FT",
             color=0xe67e22 if record.get('genre') == 'rnr' else 0x9b59b6
         )
         briefing.add_field(name="🏷️ Genre", value=str(record.get('genre', 'N/A')).upper(), inline=True)
         briefing.add_field(name="⏱️ BPM", value=str(record.get('target_bpm', 'Var')), inline=True)
         briefing.add_field(name="📅 Deadline", value=str(record.get('deadline', 'ASAP')), inline=False)
         
-        await channel.send(embed=briefing)
+        # Mention
+        mention = f"<@{ADMIN_USER_ID}>" if str(ADMIN_USER_ID) != "0" else "@everyone"
+        await channel.send(content=f"{mention}", embed=briefing)
 
-        # B. The Carousel (Bottom Card)
+        # Carousel
         tracks = record.get('tracks', [])
         if tracks and len(tracks) > 0:
             view = CarouselView(tracks, record)
-            
-            # 👇 UPDATED LINK HERE 👇
             view.add_item(discord.ui.Button(label="Open Admin Dashboard", url="https://song-tailor-website.vercel.app/pages/admin"))
-            
             await channel.send(embed=view.get_embed(), view=view)
         
         return web.Response(text="OK", status=200)
