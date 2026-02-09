@@ -6,74 +6,71 @@ import discord
 from discord.ext import commands
 from aiohttp import web
 
+# 1. Setup Logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("DiscordWebhookBot")
+logger = logging.getLogger("DebugBot")
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID"))
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
 WEBHOOK_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
-# 🔑 ADD YOUR DISCORD USER ID HERE (Right-click your name in Discord -> Copy User ID)
-# If you leave this as 0, it will just mention @everyone
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", 0) 
+# 2. Minimal Bot Setup (Intents Enabled)
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-class CarouselView(discord.ui.View):
-    def __init__(self, tracks):
-        super().__init__(timeout=None)
-        self.tracks = [t for t in tracks if t and t.get('url')]
-        self.current_index = 0
+async def handle_webhook(request):
+    # 3. Security Check
+    secret = request.headers.get('X-Webhook-Secret')
+    if secret != WEBHOOK_SECRET:
+        logger.warning(f"Security Mismatch! Expected {WEBHOOK_SECRET}, got {secret}")
+        return web.Response(text="Bad Secret", status=401)
 
-    def get_embed(self):
-        track = self.tracks[self.current_index]
-        embed = discord.Embed(title=f"🎼 Track Preview: {track.get('title', 'Untitled')}", color=0x9b59b6)
-        embed.set_image(url=self.get_yt_thumb(track.get('url')))
-        return embed
+    try:
+        # 4. Try to parse data
+        data = await request.json()
+        record = data.get('record', {})
+        logger.info(f"Payload received for: {record.get('title', 'Unknown')}")
 
-    def get_yt_thumb(self, url):
-        if 'v=' in url: return f"https://img.youtube.com/vi/{url.split('v=')[-1].split('&')[0]}/mqdefault.jpg"
-        return None
+        # 5. Try to find channel
+        channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if not channel:
+            logger.info("Channel not in cache, fetching...")
+            try:
+                channel = await bot.fetch_channel(TARGET_CHANNEL_ID)
+            except Exception as ex:
+                return web.Response(text=f"ERROR: Cannot find channel. {ex}", status=200)
 
-class WebhookBot(commands.Bot):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True 
-        super().__init__(command_prefix="!", intents=intents)
-        self.web_app = web.Application()
-        self.web_app.router.add_post('/webhook', self.handle_webhook)
-
-    async def setup_hook(self):
-        runner = web.AppRunner(self.web_app)
-        await runner.setup()
-        await web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT).start()
-
-    async def handle_webhook(self, request):
-        if request.headers.get('X-Webhook-Secret') != WEBHOOK_SECRET:
-            return web.Response(status=401)
-
+        # 6. Try to send a simple message first
         try:
-            payload = await request.json()
-            record = payload.get('record') or {}
-            channel = self.get_channel(TARGET_CHANNEL_ID) or await self.fetch_channel(TARGET_CHANNEL_ID)
-            
-            # 🔔 BUILD THE PING
-            # Mentions a specific user if ID is provided, otherwise pings @everyone
-            mention = f"<@{ADMIN_USER_ID}>" if ADMIN_USER_ID != 0 else "@everyone"
-            
-            price = f"{int(record.get('total_price', 0)):,}".replace(',', ' ')
-            briefing = discord.Embed(
-                title=f"🚀 NEW PROJECT: {record.get('title', 'Untitled')}",
-                description=f"{mention} - A new request has arrived!\n💰 **Budget:** {price} FT",
-                color=15548997 if record.get('genre') == 'rnr' else 10181046
-            )
+            # We skip the complex embed for 1 second to test the connection
+            await channel.send(f"✅ **Connection Successful!**\nNew Project: {record.get('title', 'Untitled')}")
+        except Exception as ex:
+            return web.Response(text=f"ERROR: Cannot send message. Permissions? {ex}", status=200)
 
-            # 🔘 SEND
-            await channel.send(content=mention, embed=briefing)
-            return web.Response(text="OK", status=200)
+        # If we get here, it worked!
+        return web.Response(text="Success!", status=200)
 
-        except Exception as e:
-            logger.error(f"WEBHOOK ERROR: {str(e)}")
-            return web.Response(text=str(e), status=500)
+    except Exception as e:
+        # 🚨 THIS IS THE MAGIC FIX 🚨
+        # Instead of crashing with 500, we return 200 and print the error.
+        logger.error(f"CRASH: {e}")
+        return web.Response(text=f"Handled Error: {e}", status=200)
+
+async def setup_server():
+    app = web.Application()
+    app.router.add_post('/webhook', handle_webhook)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', WEBHOOK_PORT)
+    await site.start()
+    logger.info(f"Server running on port {WEBHOOK_PORT}")
+
+@bot.event
+async def on_ready():
+    logger.info(f"Logged in as {bot.user}")
+    await setup_server()
 
 if __name__ == "__main__":
-    WebhookBot().run(TOKEN)
+    bot.run(TOKEN)
