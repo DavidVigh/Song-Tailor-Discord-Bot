@@ -141,42 +141,30 @@ class WebhookBot(commands.Bot):
  """
         try:
             data = json.loads(body_bytes.decode('utf-8'))
-            logger.info(f"Received webhook payload: {data}")
-
-            # --- DATA EXTRACTION ---
-            # IMPORTANT: Adjust the path below based on your actual Supabase payload structure.
-            # A standard Supabase database webhook payload looks like:
-            # { "type": "INSERT", "table": "mytable", "record": { "id": 1, "thumbnails": ["url1", "url2"] }, ... }
-            
             record = data.get('record', {})
-            # We assume the column in supabase is named 'thumbnail_urls' and is a JSONB array of strings.
-            thumbnail_urls = record.get('thumbnail_urls', [])
 
-            if not thumbnail_urls or not isinstance(thumbnail_urls, list) or len(thumbnail_urls) == 0:
-                logger.warning("No valid thumbnail URL list found in webhook payload.")
-                return web.Response(text="No data to process", status=200)
+            # 🛠️ FIX: Look into 'tracks' instead of 'thumbnail_urls'
+            tracks = record.get('tracks', [])
+            
+            # Extract just the URLs from the track objects for the carousel
+            thumbnail_urls = [t.get('url') for t in tracks if t.get('url')]
 
-            # 3. Find channel and send carousel
+            if not thumbnail_urls:
+                logger.warning("No track URLs found to display in carousel.")
+                return web.Response(text="No tracks found", status=200)
+
             channel = self.get_channel(TARGET_CHANNEL_ID)
-            if not channel:
-                 logger.error(f"Could not find target channel ID: {TARGET_CHANNEL_ID}")
-                 # Return 200 so Supabase doesn't keep retrying if our config is wrong
-                 return web.Response(text="Channel not found config error", status=200)
+            if channel:
+                view = CarouselView(thumbnail_urls)
+                # You can customize this embed title to show the Project Title!
+                embed = view.get_embed()
+                embed.title = f"🎵 New Project: {record.get('title', 'Untitled')}"
+                
+                await channel.send(embed=embed, view=view)
+                return web.Response(text="Carousel sent")
 
-            # Create View and Initial Embed
-            view = CarouselView(thumbnail_urls)
-            embed = view.get_embed()
-
-            await channel.send(embed=embed, view=view)
-            logger.info("Carousel sent successfully.")
-
-            return web.Response(text="Webhook processed")
-
-        except json.JSONDecodeError:
-            logger.error("Failed to decode JSON body")
-            return web.Response(text="Invalid JSON", status=400)
         except Exception as e:
-            logger.error(f"Error processing webhook: {e}", exc_info=True)
+            logger.error(f"Error: {e}")
             return web.Response(text="Internal Error", status=500)
 
 
