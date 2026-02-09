@@ -117,7 +117,7 @@ async def handle_webhook(request):
         tracks = record.get('tracks', [])
         if tracks and len(tracks) > 0:
             view = CarouselView(tracks, record)
-            view.add_item(discord.ui.Button(label="Open Admin Dashboard", url="https://song-tailor-website.vercel.app/"))
+            view.add_item(discord.ui.Button(label="Open Admin Dashboard", url="https://song-tailor-website.vercel.app/pages/admin"))
             await channel.send(embed=view.get_embed(), view=view)
         
         return web.Response(text="OK", status=200)
