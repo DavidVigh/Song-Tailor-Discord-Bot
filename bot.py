@@ -135,10 +135,10 @@ class WebhookBot(commands.Bot):
         # 2. Verify Signature (Security Best Practice)
         # Comment this out if testing locally without real Supabase headers, 
         # but MUST enable in production.
-        if not verify_supabase_signature(body_bytes, signature_header):
+        """ if not verify_supabase_signature(body_bytes, signature_header):
              logger.warning("Invalid webhook signature received.")
              return web.Response(text="Invalid Signature", status=401)
-
+ """
         try:
             data = json.loads(body_bytes.decode('utf-8'))
             logger.info(f"Received webhook payload: {data}")
