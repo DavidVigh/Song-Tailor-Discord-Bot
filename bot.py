@@ -13,7 +13,6 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TARGET_CHANNEL_ID = int(os.getenv("TARGET_CHANNEL_ID"))
 WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", 8080))
 WEBHOOK_SECRET = os.getenv("SUPABASE_JWT_SECRET")
-ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", 0)
 
 # Database Connection (For looking up names)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -80,11 +79,9 @@ async def handle_webhook(request):
         # --- 🔍 PROFILE LOOKUP START ---
         client_name = "Unknown Profile"
         
-        # Only try to fetch if we have the ID and the Keys
         if user_id and SUPABASE_URL and SUPABASE_KEY:
             try:
                 async with aiohttp.ClientSession() as session:
-                    # We ask Supabase: "Give me the full_name for this ID"
                     url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=full_name"
                     headers = {
                         "apikey": SUPABASE_KEY,
@@ -113,15 +110,14 @@ async def handle_webhook(request):
         briefing.add_field(name="⏱️ BPM", value=str(record.get('target_bpm', 'Var')), inline=True)
         briefing.add_field(name="📅 Deadline", value=str(record.get('deadline', 'ASAP')), inline=False)
         
-        # Mention
-        mention = f"<@{ADMIN_USER_ID}>" if str(ADMIN_USER_ID) != "0" else "@everyone"
-        await channel.send(content=f"{mention}", embed=briefing)
+        # 🗑️ REMOVED: The mention line (<@...>) is gone.
+        await channel.send(embed=briefing)
 
         # Carousel
         tracks = record.get('tracks', [])
         if tracks and len(tracks) > 0:
             view = CarouselView(tracks, record)
-            view.add_item(discord.ui.Button(label="Open Admin Dashboard", url="https://song-tailor-website.vercel.app/pages/admin"))
+            view.add_item(discord.ui.Button(label="Open Admin Dashboard", url="https://song-tailor-website.vercel.app/"))
             await channel.send(embed=view.get_embed(), view=view)
         
         return web.Response(text="OK", status=200)
